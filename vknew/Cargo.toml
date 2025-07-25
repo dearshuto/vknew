@@ -1,0 +1,19 @@
+[package]
+name = "vknew"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vknew-macro = { path = "../vknew-macro" }
+
+ash = { version = "0.38", default-features = false }
+ash-window = "*"
+raw-window-handle = "*"
+wgpu = { version = "26.0.1", features = ["spirv"] }
+
+[dev-dependencies]
+ash = { version = "0.38", features = ["debug", "linked"]  }
+ash-window = "*"
+naga = { version = "26", features = ["glsl-in", "spv-out"] }
+tokio = { version = "1", features = ["full"] }
+winit = "0.30"
