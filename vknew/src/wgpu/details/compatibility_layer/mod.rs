@@ -12,7 +12,9 @@ use std::{borrow::Cow, collections::HashMap, ffi::CStr, time::Duration};
 
 use ash::vk::{Handle, TaggedStructure};
 
-use crate::wgpu::details::compatibility_layer::command::BeginRenderingParameters;
+use crate::wgpu::details::compatibility_layer::command::{
+    BeginRenderingParameters, BindVertexBuffersParameters,
+};
 use crate::wgpu::details::compatibility_layer::type_converter::{
     CompositeAlpha, TextureFormat, TextureUsage,
 };
@@ -156,6 +158,19 @@ impl CompatibilityLayer {
         })
     }
 
+    pub fn get_physical_device_memory_properties(
+        _physical_device: ash::vk::PhysicalDevice,
+        dst_memory_properties: &mut ash::vk::PhysicalDeviceMemoryProperties,
+    ) {
+        *dst_memory_properties =
+            ash::vk::PhysicalDeviceMemoryProperties::default().memory_types(&[
+                ash::vk::MemoryType::default().property_flags(
+                    ash::vk::MemoryPropertyFlags::HOST_VISIBLE
+                        | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
+                ),
+            ]);
+    }
+
     pub fn get_physical_device_surface_formats_khr(
         physical_device: ash::vk::PhysicalDevice,
         surface: ash::vk::SurfaceKHR,
@@ -204,19 +219,23 @@ impl CompatibilityLayer {
                 let context = Context {
                     command_pool_table: Default::default(),
                     swapchain_image_table: HashMap::default(),
+                    buffer_table: HashMap::default(),
                     image_view_table: HashMap::default(),
                     image_surface_table: HashMap::default(),
                     render_pipeline_table: HashMap::default(),
                     compute_pipeline_table: HashMap::default(),
                     shader_module_table: HashMap::default(),
                     semaphore_table: HashSet::default(),
+                    device_memory_working_memory_table: HashMap::default(),
                     pipeline_layout_table: Default::default(),
                     render_pipeline_id_generator: IdGenerator::new(),
                     command_pool_id_generator: IdGenerator::new(),
                     command_table: HashMap::default(),
+                    buffer_id_generator: IdGenerator::new(),
+                    command_buffer_id_generator: IdGenerator::new(),
+                    device_memory_id_generator: IdGenerator::new(),
                     shader_module_id_generator: IdGenerator::new(),
                     semaphore_id_generator: IdGenerator::new(),
-                    command_buffer_id_generator: IdGenerator::new(),
                     image_id_generator: IdGenerator::new(),
                     image_view_id_generator: IdGenerator::new(),
                     pipeline_layout_id_generator: IdGenerator::new(),
@@ -250,6 +269,125 @@ impl CompatibilityLayer {
 
         let instance_handle = Accessor::from(device).peek().0;
         *queue = ash::vk::Queue::from_raw(InstanceHandleAdapter(instance_handle).into());
+    }
+
+    pub fn get_buffer_memory_requirements(
+        _device: ash::vk::Device,
+        _buffer: ash::vk::Buffer,
+        dst_memory_requirements: &mut ash::vk::MemoryRequirements,
+    ) {
+        *dst_memory_requirements = ash::vk::MemoryRequirements::default()
+            .size(1)
+            .alignment(1)
+            .memory_type_bits(u32::MAX);
+    }
+
+    pub fn allocate_memory(
+        device: ash::vk::Device,
+        allocate_info: &ash::vk::MemoryAllocateInfo<'_>,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+        dst_memory: &mut ash::vk::DeviceMemory,
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let mut buffer = Vec::default();
+            buffer.resize(allocate_info.allocation_size as usize, 0);
+
+            let id = context.device_memory_id_generator.generate();
+            context
+                .device_memory_working_memory_table
+                .insert(id, buffer);
+            AccessorMut::from(dst_memory).with(id);
+            ash::vk::Result::SUCCESS
+        })
+    }
+
+    pub fn free_memory(
+        device: ash::vk::Device,
+        memory: ash::vk::DeviceMemory,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+    ) {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        let id = Accessor::from(memory).peek();
+
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            context.device_memory_working_memory_table.remove(&id);
+        });
+    }
+
+    pub fn map_memory(
+        device: ash::vk::Device,
+        memory: ash::vk::DeviceMemory,
+        offset: ash::vk::DeviceSize,
+        size: ash::vk::DeviceSize,
+        _flags: ash::vk::MemoryMapFlags,
+        pp_data: *mut *mut c_void,
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        let id = Accessor::from(memory).peek();
+
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let Some(working_memory) = &mut context.device_memory_working_memory_table.get_mut(&id)
+            else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let offset = offset as usize;
+            let size = size as usize;
+            let sliced = &mut working_memory[offset..(offset + size)];
+
+            unsafe { *pp_data = sliced.as_mut_ptr() as *mut c_void };
+
+            ash::vk::Result::SUCCESS
+        })
+    }
+
+    pub fn unmap_memory(_device: ash::vk::Device, _memory: ash::vk::DeviceMemory) {}
+
+    pub fn bind_buffer_memory(
+        device: ash::vk::Device,
+        buffer: ash::vk::Buffer,
+        memory: ash::vk::DeviceMemory,
+        memory_offset: ash::vk::DeviceSize,
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        let mapping_id = Accessor::from(memory).peek();
+        let id = Accessor::from(buffer).peek();
+
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let queue = &context.queue;
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let Some(data) = context.device_memory_working_memory_table.get(&mapping_id) else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let Some(buffer) = context.buffer_table.get_mut(&id) else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            queue.write_buffer(
+                buffer,
+                memory_offset as u64,
+                &data[memory_offset as usize..],
+            );
+
+            ash::vk::Result::SUCCESS
+        })
     }
 
     pub fn create_swapchain_khr(
@@ -583,6 +721,16 @@ impl CompatibilityLayer {
                     return ash::vk::Result::ERROR_UNKNOWN;
                 };
 
+                let buffers = [wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<f32>() as u64 * 2,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    }],
+                }];
+
                 let render_pipeline =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: None,
@@ -593,7 +741,7 @@ impl CompatibilityLayer {
                                 CStr::from_ptr(shader_stages[0].p_name).to_str().unwrap()
                             }),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[],
+                            buffers: &buffers,
                         },
                         fragment: Some(wgpu::FragmentState {
                             module: fs_module,
@@ -709,6 +857,48 @@ impl CompatibilityLayer {
             };
 
             context.semaphore_table.remove(&id);
+        });
+    }
+
+    pub fn create_buffer(
+        device: ash::vk::Device,
+        create_info: &ash::vk::BufferCreateInfo<'_>,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+        dst_buffer: &mut ash::vk::Buffer,
+    ) -> ash::vk::Result {
+        let destriptor = wgpu::BufferDescriptor {
+            label: None,
+            size: create_info.size,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        };
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|instance_context: &mut _| {
+            let Some(context) = &mut instance_context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let buffer = instance_context.device.create_buffer(&destriptor);
+            let id = context.buffer_id_generator.generate();
+            context.buffer_table.insert(id, buffer);
+            AccessorMut::from(dst_buffer).with(id);
+            ash::vk::Result::SUCCESS
+        })
+    }
+
+    pub fn destroy_buffer(
+        device: ash::vk::Device,
+        buffer: ash::vk::Buffer,
+        _allocation_callbacks: Option<&ash::vk::AllocationCallbacks<'_>>,
+    ) {
+        let id = Accessor::from(buffer).peek();
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            context.buffer_table.remove(&id);
         });
     }
 
@@ -853,6 +1043,42 @@ impl CompatibilityLayer {
         })
     }
 
+    pub fn cmd_bind_vertex_buffers(
+        command_buffer: ash::vk::CommandBuffer,
+        first_binding: u32,
+        buffers: &[ash::vk::Buffer],
+        offsets: &[ash::vk::DeviceSize],
+    ) {
+        let (id, mut instance_handle) = Accessor::from(command_buffer)
+            .peek_return(|context: &_| (context.id, context.instance_handle));
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            let Some(command_list) = context.command_table.get_mut(&id) else {
+                return;
+            };
+
+            let buffers = std::array::from_fn(|index| {
+                let index = index.min(buffers.len() - 1);
+                Accessor::from(buffers[index]).peek()
+            });
+            let offsets = std::array::from_fn(|index| {
+                let index = index.min(offsets.len() - 1);
+                offsets[index]
+            });
+            let parameters = BindVertexBuffersParameters {
+                first_binding,
+                count: buffers.len() as u32,
+                buffers,
+                offsets,
+            };
+            let command = Command::BindVertexBuffers(parameters);
+            command_list.push(command);
+        });
+    }
+
     pub fn cmd_pipeline_barrier(
         _command_buffer: ash::vk::CommandBuffer,
         _src_stage_mask: ash::vk::PipelineStageFlags,
@@ -992,15 +1218,20 @@ struct Context {
     image_view_table: HashMap<ImageViewId, ImageId>,
     pipeline_layout_table: HashMap<PipelineLayoutId, wgpu::PipelineLayout>,
     render_pipeline_table: HashMap<RenderPipelineId, wgpu::RenderPipeline>,
+    buffer_table: HashMap<BufferId, wgpu::Buffer>,
     #[allow(unused)]
     compute_pipeline_table: HashMap<ComputePipelineId, wgpu::ComputePipeline>,
     shader_module_table: HashMap<ShaderModuleId, wgpu::ShaderModule>,
     semaphore_table: HashSet<SemaphoreId>,
 
+    device_memory_working_memory_table: HashMap<DeviceMemoryId, Vec<u8>>,
+
     image_id_generator: IdGenerator<ImageId>,
     image_view_id_generator: IdGenerator<ImageViewId>,
+    buffer_id_generator: IdGenerator<BufferId>,
     command_pool_id_generator: IdGenerator<CommandPoolId>,
     command_buffer_id_generator: IdGenerator<CommandBufferId>,
+    device_memory_id_generator: IdGenerator<DeviceMemoryId>,
     pipeline_layout_id_generator: IdGenerator<PipelineLayoutId>,
     render_pipeline_id_generator: IdGenerator<RenderPipelineId>,
     shader_module_id_generator: IdGenerator<ShaderModuleId>,
@@ -1015,10 +1246,12 @@ struct CommandBufferContext {
     instance_handle: ash::vk::Instance,
 }
 
+vknew_macro::define_id!(BufferId);
 vknew_macro::define_id!(CommandBufferId);
 vknew_macro::define_id!(CommandPoolId);
 vknew_macro::define_id!(ComputePipelineId);
 vknew_macro::define_id!(DeviceId);
+vknew_macro::define_id!(DeviceMemoryId);
 vknew_macro::define_id!(ImageId);
 vknew_macro::define_id!(ImageViewId);
 vknew_macro::define_id!(PipelineLayoutId);
@@ -1040,8 +1273,10 @@ struct Accessor;
 #[vknew_macro::generate_copyable_impl(
     (ash::vk::PhysicalDevice, InstanceHandleAdapter),
     (ash::vk::Queue, InstanceHandleAdapter),
+    (ash::vk::Buffer,BufferId),
     (ash::vk::CommandPool, CommandPoolId),
     (ash::vk::Device, InstanceHandleAdapter),
+    (ash::vk::DeviceMemory, DeviceMemoryId),
     (ash::vk::Image, ImageId),
     (ash::vk::ImageView, ImageViewId),
     (ash::vk::Semaphore, SemaphoreId),

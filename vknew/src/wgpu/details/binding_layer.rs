@@ -30,6 +30,9 @@ impl BindingLayer {
             "vkCreateDevice" => {
                 Some(unsafe { std::mem::transmute(Self::create_device as *mut c_void) })
             }
+            "vkGetPhysicalDeviceMemoryProperties" => Some(unsafe {
+                std::mem::transmute(Self::get_physical_device_memory_properties as *mut c_void)
+            }),
             "vkGetPhysicalDeviceSurfaceCapabilitiesKHR" => Some(unsafe {
                 std::mem::transmute(
                     Self::get_physical_device_surface_capabilities_khr as *mut c_void,
@@ -62,6 +65,22 @@ impl BindingLayer {
             }
             "vkGetDeviceQueue" => {
                 Some(unsafe { std::mem::transmute(Self::get_device_queue as *mut c_void) })
+            }
+            "vkGetBufferMemoryRequirements" => Some(unsafe {
+                std::mem::transmute(Self::get_buffer_memory_requirements as *mut c_void)
+            }),
+            "vkAllocateMemory" => {
+                Some(unsafe { std::mem::transmute(Self::allocate_memory as *mut c_void) })
+            }
+            "vkFreeMemory" => {
+                Some(unsafe { std::mem::transmute(Self::free_memory as *mut c_void) })
+            }
+            "vkMapMemory" => Some(unsafe { std::mem::transmute(Self::map_memory as *mut c_void) }),
+            "vkUnmapMemory" => {
+                Some(unsafe { std::mem::transmute(Self::unmap_memory as *mut c_void) })
+            }
+            "vkBindBufferMemory" => {
+                Some(unsafe { std::mem::transmute(Self::bind_buffer_memory as *mut c_void) })
             }
             "vkCreateCommandPool" => {
                 Some(unsafe { std::mem::transmute(Self::create_command_pool as *mut c_void) })
@@ -123,6 +142,12 @@ impl BindingLayer {
             "vkDestroySemaphore" => {
                 Some(unsafe { std::mem::transmute(Self::destroy_semaphore as *mut c_void) })
             }
+            "vkCreateBuffer" => {
+                Some(unsafe { std::mem::transmute(Self::create_buffer as *mut c_void) })
+            }
+            "vkDestroyBuffer" => {
+                Some(unsafe { std::mem::transmute(Self::destroy_buffer as *mut c_void) })
+            }
             "vkResetCommandBuffer" => {
                 Some(unsafe { std::mem::transmute(Self::reset_command_buffer as *mut c_void) })
             }
@@ -146,6 +171,9 @@ impl BindingLayer {
             }
             "vkCmdBindPipeline" => {
                 Some(unsafe { std::mem::transmute(Self::cmd_bind_pipeline as *mut c_void) })
+            }
+            "vkCmdBindVertexBuffers" => {
+                Some(unsafe { std::mem::transmute(Self::cmd_bind_vertex_buffers as *mut c_void) })
             }
             "vkCmdPipelineBarrier" => {
                 Some(unsafe { std::mem::transmute(Self::cmd_pipeline_barrier as *mut c_void) })
@@ -204,6 +232,21 @@ impl BindingLayer {
         let dst_physical_devices =
             unsafe { std::slice::from_raw_parts_mut(p_physical_devices, count) };
         CompatibilityLayer::enumerate_physical_devices(instance, dst_physical_devices).as_raw()
+    }
+
+    fn get_physical_device_memory_properties(
+        physical_device: ash::vk::PhysicalDevice,
+        p_memory_properties: *mut ash::vk::PhysicalDeviceMemoryProperties,
+    ) {
+        if p_memory_properties == std::ptr::null_mut() {
+            return;
+        }
+
+        let dst_memory_properties = unsafe { &mut *p_memory_properties };
+        CompatibilityLayer::get_physical_device_memory_properties(
+            physical_device,
+            dst_memory_properties,
+        );
     }
 
     fn get_physical_device_surface_capabilities_khr(
@@ -290,6 +333,79 @@ impl BindingLayer {
 
         let queue = unsafe { &mut *p_queue };
         CompatibilityLayer::get_device_queue(device, queue_family_index, queue_index, queue);
+    }
+
+    fn get_buffer_memory_requirements(
+        device: ash::vk::Device,
+        buffer: ash::vk::Buffer,
+        p_memory_requirements: *mut ash::vk::MemoryRequirements,
+    ) {
+        if p_memory_requirements == std::ptr::null_mut() {
+            return;
+        }
+
+        let dst_memory_requirements = unsafe { &mut *p_memory_requirements };
+        CompatibilityLayer::get_buffer_memory_requirements(device, buffer, dst_memory_requirements);
+    }
+
+    fn allocate_memory(
+        device: ash::vk::Device,
+        p_allocate_info: *const ash::vk::MemoryAllocateInfo<'_>,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+        p_memory: *mut ash::vk::DeviceMemory,
+    ) -> i32 {
+        if p_allocate_info == std::ptr::null() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        if p_memory == std::ptr::null_mut() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        let allocate_info = unsafe { &*p_allocate_info };
+        let dst_memory = unsafe { &mut *p_memory };
+        CompatibilityLayer::allocate_memory(device, allocate_info, to_opt(p_allocator), dst_memory)
+            .as_raw()
+    }
+
+    fn free_memory(
+        device: ash::vk::Device,
+        memory: ash::vk::DeviceMemory,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+    ) {
+        if p_allocator == std::ptr::null_mut() {
+            return;
+        }
+
+        CompatibilityLayer::free_memory(device, memory, to_opt(p_allocator));
+    }
+
+    fn map_memory(
+        device: ash::vk::Device,
+        memory: ash::vk::DeviceMemory,
+        offset: ash::vk::DeviceSize,
+        size: ash::vk::DeviceSize,
+        flags: ash::vk::MemoryMapFlags,
+        pp_data: *mut *mut c_void,
+    ) -> i32 {
+        if pp_data == std::ptr::null_mut() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        CompatibilityLayer::map_memory(device, memory, offset, size, flags, pp_data).as_raw()
+    }
+
+    fn unmap_memory(device: ash::vk::Device, memory: ash::vk::DeviceMemory) {
+        CompatibilityLayer::unmap_memory(device, memory);
+    }
+
+    fn bind_buffer_memory(
+        device: ash::vk::Device,
+        buffer: ash::vk::Buffer,
+        memory: ash::vk::DeviceMemory,
+        memory_offset: ash::vk::DeviceSize,
+    ) -> i32 {
+        CompatibilityLayer::bind_buffer_memory(device, buffer, memory, memory_offset).as_raw()
     }
 
     fn destroy_surface(
@@ -577,6 +693,33 @@ impl BindingLayer {
         CompatibilityLayer::destroy_semaphore(device, semaphore, to_opt(p_allocator));
     }
 
+    fn create_buffer(
+        device: ash::vk::Device,
+        p_create_info: *const ash::vk::BufferCreateInfo<'_>,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+        p_buffer: *mut ash::vk::Buffer,
+    ) -> i32 {
+        if p_create_info == std::ptr::null() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        if p_buffer == std::ptr::null_mut() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        let info = unsafe { &*p_create_info };
+        let dst_buffer = unsafe { &mut *p_buffer };
+        CompatibilityLayer::create_buffer(device, info, to_opt(p_allocator), dst_buffer).as_raw()
+    }
+
+    fn destroy_buffer(
+        device: ash::vk::Device,
+        buffer: ash::vk::Buffer,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+    ) {
+        CompatibilityLayer::destroy_buffer(device, buffer, to_opt(p_allocator));
+    }
+
     fn reset_command_buffer(
         command_buffer: ash::vk::CommandBuffer,
         flags: ash::vk::CommandBufferResetFlags,
@@ -625,6 +768,31 @@ impl BindingLayer {
         pipeline: ash::vk::Pipeline,
     ) {
         CompatibilityLayer::cmd_bind_pipeline(command_buffer, pipeline_bind_point, pipeline);
+    }
+
+    fn cmd_bind_vertex_buffers(
+        command_buffer: ash::vk::CommandBuffer,
+        first_binding: u32,
+        binding_count: u32,
+        p_buffers: *const ash::vk::Buffer,
+        p_offsets: *const ash::vk::DeviceSize,
+    ) {
+        if p_buffers == std::ptr::null() {
+            return;
+        }
+
+        if p_offsets == std::ptr::null() {
+            return;
+        }
+
+        let buffers = unsafe { std::slice::from_raw_parts(p_buffers, binding_count as usize) };
+        let offsets = unsafe { std::slice::from_raw_parts(p_offsets, binding_count as usize) };
+        CompatibilityLayer::cmd_bind_vertex_buffers(
+            command_buffer,
+            first_binding,
+            buffers,
+            offsets,
+        );
     }
 
     fn cmd_pipeline_barrier(

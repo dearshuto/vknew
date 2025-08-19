@@ -88,6 +88,8 @@ struct Renderer {
     fs_shader_module: ash::vk::ShaderModule,
     pipeline: ash::vk::Pipeline,
     layout: ash::vk::PipelineLayout,
+    buffer: ash::vk::Buffer,
+    device_memory: ash::vk::DeviceMemory,
 }
 
 impl Renderer {
@@ -218,18 +220,12 @@ impl Renderer {
         let (vs_shader_module, fs_shader_module) = {
             let vs_source = r"
             #version 450
+
+            layout (location = 0) in vec2 i_Position;
+            
             void main()
             {
-                if (gl_VertexIndex == 0)
-                {
-                    gl_Position = vec4(0.0, 0.5, 0.0, 1.0);
-                } else if (gl_VertexIndex == 1)
-                {
-                    gl_Position = vec4(-0.5, -0.5, 0.0, 1.0);
-                } else
-                {
-                    gl_Position = vec4(0.5, -0.5, 0.0, 1.0);
-                }              
+                gl_Position = vec4(i_Position, 0.0, 1.0);
             }";
             let fs_source = r"
             #version 450
@@ -290,7 +286,17 @@ impl Renderer {
                     .module(fs_shader_module)
                     .name(c"main"),
             ];
-            let vertex_input_state = ash::vk::PipelineVertexInputStateCreateInfo::default();
+            let vertex_attribute_descriptions =
+                [ash::vk::VertexInputAttributeDescription::default()
+                    .location(0)
+                    .binding(0)
+                    .offset(0)
+                    .format(ash::vk::Format::R32G32_SFLOAT)];
+            let vertex_binding_descriptions = [ash::vk::VertexInputBindingDescription::default()
+                .stride(std::mem::size_of::<f32>() as u32 * 2)];
+            let vertex_input_state = ash::vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_attribute_descriptions(&vertex_attribute_descriptions)
+                .vertex_binding_descriptions(&vertex_binding_descriptions);
             let input_assembly_state = ash::vk::PipelineInputAssemblyStateCreateInfo::default()
                 .topology(ash::vk::PrimitiveTopology::TRIANGLE_LIST);
             // 原点を Bottom-Left にしないと座標系が一致しない
@@ -342,6 +348,50 @@ impl Renderer {
             }
             .unwrap()
         }[0];
+
+        let buffer = {
+            let create_info = ash::vk::BufferCreateInfo::default()
+                .size(64)
+                .usage(ash::vk::BufferUsageFlags::VERTEX_BUFFER)
+                .queue_family_indices(&[0]);
+            unsafe { device.create_buffer(&create_info, None) }.unwrap()
+        };
+
+        let device_memory = {
+            let device_memory_properties =
+                unsafe { instance.get_physical_device_memory_properties(physical_device) };
+            let requirement = unsafe { device.get_buffer_memory_requirements(buffer) };
+            let flags = ash::vk::MemoryPropertyFlags::HOST_VISIBLE
+                | ash::vk::MemoryPropertyFlags::HOST_COHERENT;
+            let memory_type_index = device_memory_properties
+                .memory_types
+                .iter()
+                .enumerate()
+                .find(|(index, memory_type)| {
+                    (1 << index) & requirement.memory_type_bits != 0
+                        && memory_type.property_flags & flags == flags
+                })
+                .map(|(index, _)| index as u32)
+                .unwrap();
+            let create_info = ash::vk::MemoryAllocateInfo::default()
+                .allocation_size(64)
+                .memory_type_index(memory_type_index);
+            unsafe { device.allocate_memory(&create_info, None) }.unwrap()
+        };
+
+        {
+            let ptr = unsafe {
+                device.map_memory(device_memory, 0, 64, ash::vk::MemoryMapFlags::empty())
+            }
+            .unwrap();
+            let vertex_data = [0.0, 0.5, -0.5, -0.5, 0.5, -0.5];
+            let storage = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, 6) };
+            storage[0..vertex_data.len()].copy_from_slice(&vertex_data);
+
+            unsafe { device.unmap_memory(device_memory) };
+        }
+
+        unsafe { device.bind_buffer_memory(buffer, device_memory, 0) }.unwrap();
 
         let images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
         let image_views: Vec<_> = images
@@ -404,6 +454,8 @@ impl Renderer {
             fs_shader_module,
             pipeline,
             layout,
+            buffer,
+            device_memory,
         }
     }
 
@@ -487,6 +539,15 @@ impl Renderer {
         };
 
         unsafe {
+            device.cmd_bind_vertex_buffers(
+                self.command_buffer,
+                0, /*first_binding*/
+                &[self.buffer],
+                &[0],
+            )
+        };
+
+        unsafe {
             device.cmd_draw(
                 self.command_buffer,
                 3, /*vertex_count*/
@@ -562,6 +623,9 @@ impl Drop for Renderer {
 
         unsafe {
             device.device_wait_idle().unwrap();
+
+            device.free_memory(self.device_memory, None);
+            device.destroy_buffer(self.buffer, None);
 
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_pipeline(self.pipeline, None);
