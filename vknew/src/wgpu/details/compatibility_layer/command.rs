@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::wgpu::details::compatibility_layer::{CommandBufferId, Context};
+use crate::wgpu::details::compatibility_layer::{BufferId, CommandBufferId, Context};
 
 use super::RenderPipelineId;
 
@@ -10,6 +10,7 @@ pub enum Command {
     BeginRendering(BeginRenderingParameters),
     EndRendering,
     BindRenderPipeline(RenderPipelineId),
+    BindVertexBuffers(BindVertexBuffersParameters),
     Draw(DrawParameters),
 }
 
@@ -20,6 +21,13 @@ pub struct BeginRenderingParameters {
 pub struct DrawParameters {
     pub vertices: Range<u32>,
     pub instances: Range<u32>,
+}
+
+pub struct BindVertexBuffersParameters {
+    pub first_binding: u32,
+    pub count: u32,
+    pub buffers: [BufferId; 8],
+    pub offsets: [u64; 8],
 }
 
 pub struct CommandEmulator;
@@ -48,6 +56,7 @@ impl CommandEmulator {
                 Command::EndRendering => {}
                 // 描画コマンドで処理されるはずのコマンド
                 Command::BindRenderPipeline(_) => todo!(),
+                Command::BindVertexBuffers(_) => todo!(),
                 Command::Draw(_) => todo!(),
             }
         }
@@ -105,6 +114,19 @@ impl CommandEmulator {
                     };
 
                     render_pass.set_pipeline(render_pipeline);
+                }
+                Command::BindVertexBuffers(parameters) => {
+                    for index in
+                        parameters.first_binding..(parameters.first_binding + parameters.count)
+                    {
+                        let id = parameters.buffers[index as usize];
+                        let Some(buffer) = context.buffer_table.get(&id) else {
+                            continue;
+                        };
+
+                        let offset = parameters.offsets[index as usize];
+                        render_pass.set_vertex_buffer(index, buffer.slice(offset..));
+                    }
                 }
                 Command::Draw(draw_parameters) => {
                     render_pass.draw(
