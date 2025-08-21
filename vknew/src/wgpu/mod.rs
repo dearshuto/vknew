@@ -57,6 +57,15 @@ impl WasmCompatibilityCreateInfo {
             todo!()
         };
 
+        Self::from_instance(instance, device, queue, adapter)
+    }
+
+    pub fn from_instance(
+        instance: wgpu::Instance,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter: wgpu::Adapter,
+    ) -> Self {
         Self {
             s_type: WasmCompatibilityCreateInfo::STRUCTURE_TYPE,
             p_next: std::ptr::null(),
