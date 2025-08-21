@@ -83,7 +83,6 @@ impl CommandEmulator {
                 view: &surface_texture
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default()),
-                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
