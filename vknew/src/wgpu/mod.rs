@@ -57,19 +57,23 @@ impl WasmCompatibilityCreateInfo {
             todo!()
         };
 
-        Self::from_instance(instance, device, queue, adapter)
-    }
-
-    pub fn from_instance(
-        instance: wgpu::Instance,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        adapter: wgpu::Adapter,
-    ) -> Self {
         Self {
             s_type: WasmCompatibilityCreateInfo::STRUCTURE_TYPE,
             p_next: std::ptr::null(),
             instance: Some(instance),
+            device: Some(device),
+            queue: Some(queue),
+            adapter: Some(adapter),
+        }
+    }
+
+    pub fn from_instance(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::Adapter) -> Self {
+        // 既存のインスタンスから作成した場合は wgpu::Instnace だけないものとする
+        // これは vknew 内でサーフェイスが作れないことを意味するが、この API はサーフェイスの管理は外部に委託するモードということにする
+        Self {
+            s_type: WasmCompatibilityCreateInfo::STRUCTURE_TYPE,
+            p_next: std::ptr::null(),
+            instance: None,
             device: Some(device),
             queue: Some(queue),
             adapter: Some(adapter),
