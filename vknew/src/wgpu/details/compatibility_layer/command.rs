@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::wgpu::details::compatibility_layer::{BufferId, CommandBufferId, Context};
 
-use super::RenderPipelineId;
+use super::{Accessor, RenderPipelineId};
 
 pub enum Command {
     Begin,
@@ -33,6 +33,25 @@ pub struct BindVertexBuffersParameters {
 pub struct CommandEmulator;
 
 impl CommandEmulator {
+    pub fn push_draw_command(
+        render_pass: &mut wgpu::RenderPass,
+        command_buffer: ash::vk::CommandBuffer,
+    ) {
+        let (id, instance_handle) = Accessor::from(command_buffer)
+            .peek_return(|context: &_| (context.id, context.instance_handle));
+        Accessor::from(instance_handle).peek(|context: &_| {
+            let Some(context) = &context.context else {
+                return;
+            };
+
+            let Some(command_list) = context.command_table.get(&id) else {
+                return;
+            };
+
+            Self::func(render_pass, &mut command_list.iter(), &context);
+        });
+    }
+
     pub fn emulate(
         id: CommandBufferId,
         context: &Context,
@@ -47,12 +66,14 @@ impl CommandEmulator {
             match command {
                 Command::Begin => {}
                 Command::End => {}
-                Command::BeginRendering(begin_rendering_parameters) => Self::push_draw_command(
-                    &mut command_iterator,
-                    context,
-                    begin_rendering_parameters,
-                    &mut command_encoder,
-                ),
+                Command::BeginRendering(begin_rendering_parameters) => {
+                    Self::push_draw_command_impl(
+                        &mut command_iterator,
+                        context,
+                        begin_rendering_parameters,
+                        &mut command_encoder,
+                    )
+                }
                 Command::EndRendering => {}
                 // 描画コマンドで処理されるはずのコマンド
                 Command::BindRenderPipeline(_) => todo!(),
@@ -64,7 +85,7 @@ impl CommandEmulator {
         command_encoder
     }
 
-    fn push_draw_command<'a, I>(
+    fn push_draw_command_impl<'a, I>(
         command_iterator: &mut I,
         context: &Context,
         begin_rendering_parameters: &BeginRenderingParameters,
@@ -99,10 +120,17 @@ impl CommandEmulator {
             occlusion_query_set: None,
         });
 
+        Self::func(&mut render_pass, command_iterator, context);
+        drop(render_pass);
+    }
+
+    fn func<'a, I>(render_pass: &mut wgpu::RenderPass, command_iterator: &mut I, context: &Context)
+    where
+        I: Iterator<Item = &'a Command>,
+    {
         while let Some(command) = command_iterator.next() {
             match command {
                 Command::EndRendering => {
-                    drop(render_pass);
                     return;
                 }
                 Command::BindRenderPipeline(render_pipeline_id) => {
@@ -133,9 +161,9 @@ impl CommandEmulator {
                         draw_parameters.instances.clone(),
                     );
                 }
+                Command::Begin => {}
+                Command::End => {}
                 // 描画コマンド構築中は来ないはずのコマンド
-                Command::Begin => todo!(),
-                Command::End => todo!(),
                 Command::BeginRendering(_) => todo!(),
             }
         }

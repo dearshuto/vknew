@@ -15,6 +15,7 @@ pub fn get_static_fn() -> ash::StaticFn {
     }
 }
 
+pub use details::push_draw_command;
 pub use surface::create_surface;
 pub use type_converter::{CompositeAlpha, TextureFormat, TextureUsage};
 
