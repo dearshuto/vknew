@@ -1,6 +1,7 @@
 mod details;
 mod extensions;
 mod surface;
+mod type_converter;
 
 use std::ffi::c_void;
 
@@ -15,6 +16,7 @@ pub fn get_static_fn() -> ash::StaticFn {
 }
 
 pub use surface::create_surface;
+pub use type_converter::{CompositeAlpha, TextureFormat, TextureUsage};
 
 #[repr(C)]
 pub struct ExtensionCreateInfoBase {

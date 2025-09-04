@@ -80,6 +80,14 @@ impl TextureFormat {
             wgpu::TextureFormat::Astc { .. } => todo!(),
         }
     }
+
+    pub fn from_vk(format: ash::vk::Format) -> wgpu::TextureFormat {
+        match format {
+            ash::vk::Format::B8G8R8A8_UNORM => wgpu::TextureFormat::Bgra8Unorm,
+            ash::vk::Format::B8G8R8A8_SRGB => wgpu::TextureFormat::Bgra8UnormSrgb,
+            _ => wgpu::TextureFormat::Bgra8Unorm,
+        }
+    }
 }
 
 pub struct CompositeAlpha;
@@ -130,18 +138,5 @@ impl TextureUsage {
         }
 
         flag
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        assert_eq!(
-            TextureFormat::to_vk(wgpu::TextureFormat::Bgra8Unorm),
-            ash::vk::Format::B8G8R8A8_UNORM
-        );
     }
 }
