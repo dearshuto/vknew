@@ -140,3 +140,31 @@ impl TextureUsage {
         flag
     }
 }
+
+pub struct BufferUsages;
+impl BufferUsages {
+    pub fn from_vk(usage: ash::vk::BufferUsageFlags) -> wgpu::BufferUsages {
+        let mut usages = wgpu::BufferUsages::empty();
+
+        if usage.contains(ash::vk::BufferUsageFlags::VERTEX_BUFFER) {
+            usages |= wgpu::BufferUsages::VERTEX;
+            usages |= wgpu::BufferUsages::COPY_DST;
+        }
+        if usage.contains(ash::vk::BufferUsageFlags::UNIFORM_BUFFER) {
+            usages |= wgpu::BufferUsages::UNIFORM;
+            usages |= wgpu::BufferUsages::COPY_DST;
+        }
+        if usage.contains(ash::vk::BufferUsageFlags::STORAGE_BUFFER) {
+            usages |= wgpu::BufferUsages::STORAGE;
+            usages |= wgpu::BufferUsages::COPY_DST;
+        }
+        if usage.contains(ash::vk::BufferUsageFlags::TRANSFER_DST) {
+            usages |= wgpu::BufferUsages::COPY_DST;
+        }
+        if usage.contains(ash::vk::BufferUsageFlags::TRANSFER_SRC) {
+            usages |= wgpu::BufferUsages::COPY_SRC;
+        }
+
+        usages
+    }
+}

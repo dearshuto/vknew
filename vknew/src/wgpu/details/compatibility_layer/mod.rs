@@ -14,7 +14,7 @@ use ash::vk::{Handle, TaggedStructure};
 use crate::wgpu::details::compatibility_layer::command::{
     BeginRenderingParameters, BindVertexBuffersParameters,
 };
-use crate::wgpu::type_converter::{CompositeAlpha, TextureUsage};
+use crate::wgpu::type_converter::{BufferUsages, CompositeAlpha, TextureUsage};
 use crate::wgpu::{ExtensionCreateInfoBase, TextureFormat, WasmCompatibilityCreateInfo};
 
 pub struct CompatibilityLayer;
@@ -879,7 +879,7 @@ impl CompatibilityLayer {
         let destriptor = wgpu::BufferDescriptor {
             label: None,
             size: create_info.size,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::from_vk(create_info.usage),
             mapped_at_creation: false,
         };
         let mut instance_handle = Accessor::from(device).peek().0;
