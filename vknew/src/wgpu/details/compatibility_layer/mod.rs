@@ -1,6 +1,5 @@
 mod command;
 mod id_generator;
-mod type_converter;
 
 use command::{Command, CommandEmulator, DrawParameters};
 use id_generator::IdGenerator;
@@ -15,10 +14,8 @@ use ash::vk::{Handle, TaggedStructure};
 use crate::wgpu::details::compatibility_layer::command::{
     BeginRenderingParameters, BindVertexBuffersParameters,
 };
-use crate::wgpu::details::compatibility_layer::type_converter::{
-    CompositeAlpha, TextureFormat, TextureUsage,
-};
-use crate::wgpu::{ExtensionCreateInfoBase, WasmCompatibilityCreateInfo};
+use crate::wgpu::type_converter::{CompositeAlpha, TextureUsage};
+use crate::wgpu::{ExtensionCreateInfoBase, TextureFormat, WasmCompatibilityCreateInfo};
 
 pub struct CompatibilityLayer;
 
@@ -33,9 +30,6 @@ impl CompatibilityLayer {
             let extension = unsafe { &*(extension_ptr as *const ExtensionCreateInfoBase) };
             if extension.s_type == WasmCompatibilityCreateInfo::STRUCTURE_TYPE {
                 let extension = unsafe { &*(extension_ptr as *const WasmCompatibilityCreateInfo) };
-                let Some(instance) = &extension.instance else {
-                    return ash::vk::Result::ERROR_UNKNOWN;
-                };
                 let Some(device) = &extension.device else {
                     return ash::vk::Result::ERROR_UNKNOWN;
                 };
@@ -47,7 +41,7 @@ impl CompatibilityLayer {
                 };
 
                 AccessorMut::from(dst_instance).allocate(InstanceContext {
-                    instance: instance.clone(),
+                    instance: extension.instance.clone(),
                     device: device.clone(),
                     queue: queue.clone(),
                     adapter: adapter.clone(),
@@ -90,13 +84,15 @@ impl CompatibilityLayer {
     ) -> Result<ash::vk::SurfaceKHR, ash::vk::Result> {
         let mut handle: ash::vk::Instance = instance.handle();
         AccessorMut::from(&mut handle).update(|context: &mut _| {
+            let Some(instance) = &context.instance else {
+                return Err(ash::vk::Result::ERROR_UNKNOWN);
+            };
+
             let surface = unsafe {
-                context
-                    .instance
-                    .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                        raw_display_handle: display_handle,
-                        raw_window_handle: window_handle,
-                    })
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: display_handle,
+                    raw_window_handle: window_handle,
+                })
             };
             let Ok(surface) = surface else {
                 return Err(ash::vk::Result::ERROR_UNKNOWN);
@@ -731,6 +727,20 @@ impl CompatibilityLayer {
                     }],
                 }];
 
+                let format = if info.p_next == std::ptr::null() {
+                    wgpu::TextureFormat::Bgra8UnormSrgb
+                } else {
+                    let info =
+                        &unsafe { *(info.p_next as *const ash::vk::PipelineRenderingCreateInfo) };
+                    let format = unsafe {
+                        std::slice::from_raw_parts(
+                            info.p_color_attachment_formats,
+                            info.color_attachment_count as usize,
+                        )
+                    }[0];
+                    TextureFormat::from_vk(format)
+                };
+
                 let render_pipeline =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: None,
@@ -750,7 +760,7 @@ impl CompatibilityLayer {
                             }),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
-                                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                                format,
                                 blend: None,
                                 write_mask: wgpu::ColorWrites::all(),
                             })],
@@ -1196,10 +1206,17 @@ impl CompatibilityLayer {
             ash::vk::Result::SUCCESS
         })
     }
+
+    pub fn push_draw_command(
+        render_pass: &mut wgpu::RenderPass,
+        command_buffer: ash::vk::CommandBuffer,
+    ) {
+        CommandEmulator::push_draw_command(render_pass, command_buffer);
+    }
 }
 
 pub struct InstanceContext<'a> {
-    instance: wgpu::Instance,
+    instance: Option<wgpu::Instance>,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,

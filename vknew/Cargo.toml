@@ -14,6 +14,7 @@ wgpu = { version = "25.0", features = ["spirv"] }
 [dev-dependencies]
 ash = { version = "0.38", features = ["debug", "linked"]  }
 ash-window = "*"
+eframe = { version = "0.32.1", features = ["wgpu"] }       
 naga = { version = "25", features = ["glsl-in", "spv-out"] }
 tokio = { version = "1", features = ["full"] }
 winit = "0.30"

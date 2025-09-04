@@ -7,6 +7,9 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
+#[path = "common/mod.rs"]
+mod common;
+
 #[tokio::main]
 async fn main() {
     let evnet_loop = EventLoop::builder().build().unwrap();
@@ -235,22 +238,8 @@ impl Renderer {
                 o_Color = vec4(1.0);
             }";
 
-            let convert = |source: &str, stage: naga::ShaderStage| {
-                let options = naga::front::glsl::Options::from(stage);
-                let module = naga::front::glsl::Frontend::default()
-                    .parse(&options, &source)
-                    .unwrap();
-                let options = naga::back::spv::Options::default();
-                let info = naga::valid::Validator::new(
-                    naga::valid::ValidationFlags::all(),
-                    naga::valid::Capabilities::all(),
-                )
-                .validate(&module)
-                .unwrap();
-                naga::back::spv::write_vec(&module, &info, &options, None).unwrap()
-            };
-            let vs_code = convert(&vs_source, naga::ShaderStage::Vertex);
-            let fs_code = convert(&fs_source, naga::ShaderStage::Fragment);
+            let vs_code = common::convert_shader(&vs_source, naga::ShaderStage::Vertex);
+            let fs_code = common::convert_shader(&fs_source, naga::ShaderStage::Fragment);
 
             unsafe {
                 (

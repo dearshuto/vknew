@@ -2,6 +2,7 @@ mod binding_layer;
 mod compatibility_layer;
 
 pub use binding_layer::BindingLayer;
+use compatibility_layer::CompatibilityLayer;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 pub fn create_surface_impl(
@@ -18,4 +19,12 @@ pub fn create_surface_impl(
         window_handle,
         allocation_callbacks,
     )
+}
+
+pub fn push_draw_command(
+    render_pass: &mut wgpu::RenderPass,
+    _device: ash::vk::Device,
+    command_buffer: ash::vk::CommandBuffer,
+) {
+    CompatibilityLayer::push_draw_command(render_pass, command_buffer);
 }
