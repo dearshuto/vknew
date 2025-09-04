@@ -1,17 +1,22 @@
 use std::ops::Range;
 
-use crate::wgpu::details::compatibility_layer::{BufferId, CommandBufferId, Context};
+use crate::wgpu::details::compatibility_layer::{
+    BufferId, CommandBufferId, Context, DescriptorSetId,
+};
 
-use super::{Accessor, RenderPipelineId};
+use super::{Accessor, PipelineId};
 
 pub enum Command {
     Begin,
     End,
     BeginRendering(BeginRenderingParameters),
     EndRendering,
-    BindRenderPipeline(RenderPipelineId),
+    BindRenderPipeline(PipelineId),
+    BindComputePipeline(PipelineId),
+    BindDescriptorSets((ash::vk::PipelineBindPoint, DescriptorSetId)),
     BindVertexBuffers(BindVertexBuffersParameters),
     Draw(DrawParameters),
+    Dispatch((u32, u32, u32)),
 }
 
 pub struct BeginRenderingParameters {
@@ -75,10 +80,17 @@ impl CommandEmulator {
                     )
                 }
                 Command::EndRendering => {}
-                // 描画コマンドで処理されるはずのコマンド
+                Command::BindComputePipeline(id) => Self::push_compute_command(
+                    &mut command_iterator,
+                    context,
+                    *id,
+                    &mut command_encoder,
+                ),
                 Command::BindRenderPipeline(_) => todo!(),
                 Command::BindVertexBuffers(_) => todo!(),
                 Command::Draw(_) => todo!(),
+                Command::Dispatch(_) => todo!(),
+                Command::BindDescriptorSets(_) => todo!(),
             }
         }
 
@@ -163,9 +175,58 @@ impl CommandEmulator {
                 }
                 Command::Begin => {}
                 Command::End => {}
-                // 描画コマンド構築中は来ないはずのコマンド
                 Command::BeginRendering(_) => todo!(),
+                Command::BindComputePipeline(_) => todo!(),
+                Command::Dispatch(_) => panic!(),
+                Command::BindDescriptorSets(_) => todo!(),
             }
         }
+    }
+
+    fn push_compute_command<'a, I>(
+        command_iterator: &mut I,
+        context: &Context,
+        id: PipelineId,
+        command_encoder: &mut wgpu::CommandEncoder,
+    ) where
+        I: Iterator<Item = &'a Command>,
+    {
+        let Some(pipeline) = context.compute_pipeline_table.get(&id) else {
+            return;
+        };
+
+        let mut compute_pass = command_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(pipeline);
+
+        while let Some(command) = command_iterator.next() {
+            match command {
+                Command::Dispatch((x, y, z)) => compute_pass.dispatch_workgroups(*x, *y, *z),
+                Command::BindComputePipeline(pipeline_id) => {
+                    let Some(pipeline) = context.compute_pipeline_table.get(pipeline_id) else {
+                        continue;
+                    };
+                    compute_pass.set_pipeline(pipeline);
+                }
+                Command::BindDescriptorSets((_bind_point, id)) => {
+                    let Some(bind_group) = context.descriptor_set_table.get(&id) else {
+                        continue;
+                    };
+
+                    compute_pass.set_bind_group(0, bind_group, &[]);
+                }
+                Command::Begin => todo!(),
+                Command::End => break,
+                Command::BeginRendering(_begin_rendering_parameters) => todo!(),
+                Command::EndRendering => todo!(),
+                Command::BindRenderPipeline(_pipeline_id) => todo!(),
+                Command::BindVertexBuffers(_bind_vertex_buffers_parameters) => todo!(),
+                Command::Draw(_draw_parameters) => todo!(),
+            }
+        }
+
+        drop(compute_pass);
     }
 }

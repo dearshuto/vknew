@@ -115,8 +115,29 @@ impl BindingLayer {
             "vkDestroyPipelineLayout" => {
                 Some(unsafe { std::mem::transmute(Self::destroy_pipeline_layout as *mut c_void) })
             }
+            "vkCreateDescriptorPool" => {
+                Some(unsafe { std::mem::transmute(Self::create_descriptor_pool as *mut c_void) })
+            }
+            "vkDestroyDescriptorPool" => {
+                Some(unsafe { std::mem::transmute(Self::destroy_descriptor_pool as *mut c_void) })
+            }
+            "vkAllocateDescriptorSets" => {
+                Some(unsafe { std::mem::transmute(Self::allocate_descriptor_sets as *mut c_void) })
+            }
+            "vkCreateDescriptorSetLayout" => Some(unsafe {
+                std::mem::transmute(Self::create_descriptor_set_layout as *mut c_void)
+            }),
+            "vkDestroyDescriptorSetLayout" => Some(unsafe {
+                std::mem::transmute(Self::destroy_descriptor_set_layout as *mut c_void)
+            }),
+            "vkUpdateDescriptorSets" => {
+                Some(unsafe { std::mem::transmute(Self::update_descriptor_sets as *mut c_void) })
+            }
             "vkCreateGraphicsPipelines" => {
                 Some(unsafe { std::mem::transmute(Self::create_graphics_pipelines as *mut c_void) })
+            }
+            "vkCreateComputePipelines" => {
+                Some(unsafe { std::mem::transmute(Self::create_compute_pipelines as *mut c_void) })
             }
             "vkDestroyPipeline" => {
                 Some(unsafe { std::mem::transmute(Self::destroy_pipeline as *mut c_void) })
@@ -172,6 +193,9 @@ impl BindingLayer {
             "vkCmdBindPipeline" => {
                 Some(unsafe { std::mem::transmute(Self::cmd_bind_pipeline as *mut c_void) })
             }
+            "vkCmdBindDescriptorSets" => {
+                Some(unsafe { std::mem::transmute(Self::cmd_bind_descriptor_sets as *mut c_void) })
+            }
             "vkCmdBindVertexBuffers" => {
                 Some(unsafe { std::mem::transmute(Self::cmd_bind_vertex_buffers as *mut c_void) })
             }
@@ -179,6 +203,9 @@ impl BindingLayer {
                 Some(unsafe { std::mem::transmute(Self::cmd_pipeline_barrier as *mut c_void) })
             }
             "vkCmdDraw" => Some(unsafe { std::mem::transmute(Self::cmd_draw as *mut c_void) }),
+            "vkCmdDispatch" => {
+                Some(unsafe { std::mem::transmute(Self::cmd_dispatch as *mut c_void) })
+            }
             "vkQueuePresentKHR" => {
                 Some(unsafe { std::mem::transmute(Self::queue_present as *mut c_void) })
             }
@@ -605,6 +632,93 @@ impl BindingLayer {
         CompatibilityLayer::destroy_pipeline_layout(device, pipeline_layout, to_opt(p_allocator));
     }
 
+    fn create_descriptor_pool(
+        device: ash::vk::Device,
+        p_create_info: *const ash::vk::DescriptorPoolCreateInfo<'_>,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+        p_descriptor_pool: *mut ash::vk::DescriptorPool,
+    ) -> i32 {
+        let info = unsafe { &*p_create_info };
+        let dst_descriptor_pool = unsafe { &mut *p_descriptor_pool };
+        CompatibilityLayer::create_descriptor_pool(
+            device,
+            info,
+            to_opt(p_allocator),
+            dst_descriptor_pool,
+        )
+        .as_raw()
+    }
+
+    fn destroy_descriptor_pool(
+        device: ash::vk::Device,
+        descriptor_pool: ash::vk::DescriptorPool,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+    ) {
+        CompatibilityLayer::destroy_descriptor_pool(device, descriptor_pool, to_opt(p_allocator));
+    }
+
+    fn allocate_descriptor_sets(
+        device: ash::vk::Device,
+        p_allocate_info: *const ash::vk::DescriptorSetAllocateInfo<'_>,
+        p_descriptor_sets: *mut ash::vk::DescriptorSet,
+    ) -> i32 {
+        if p_allocate_info == std::ptr::null() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        let info = unsafe { &*p_allocate_info };
+        let dst_descriptor_sets = unsafe {
+            std::slice::from_raw_parts_mut(p_descriptor_sets, info.descriptor_set_count as usize)
+        };
+
+        CompatibilityLayer::allocate_descriptor_sets(device, info, dst_descriptor_sets).as_raw()
+    }
+
+    fn create_descriptor_set_layout(
+        device: ash::vk::Device,
+        p_create_info: *const ash::vk::DescriptorSetLayoutCreateInfo<'_>,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+        p_set_layout: *mut ash::vk::DescriptorSetLayout,
+    ) -> i32 {
+        let info = unsafe { &*p_create_info };
+        let dst_layout = unsafe { &mut *p_set_layout };
+        CompatibilityLayer::create_descriptor_set_layout(
+            device,
+            info,
+            to_opt(p_allocator),
+            dst_layout,
+        )
+        .as_raw()
+    }
+
+    fn destroy_descriptor_set_layout(
+        device: ash::vk::Device,
+        descriptor_set_layout: ash::vk::DescriptorSetLayout,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+    ) {
+        CompatibilityLayer::destroy_descriptor_set_layout(
+            device,
+            descriptor_set_layout,
+            to_opt(p_allocator),
+        );
+    }
+
+    fn update_descriptor_sets(
+        device: ash::vk::Device,
+        descriptor_write_count: u32,
+        p_descriptor_writes: *const ash::vk::WriteDescriptorSet<'_>,
+        descriptor_copy_count: u32,
+        p_descriptor_copies: *const ash::vk::CopyDescriptorSet<'_>,
+    ) {
+        let descriptor_writes = unsafe {
+            std::slice::from_raw_parts(p_descriptor_writes, descriptor_write_count as usize)
+        };
+        let descriptor_copies = unsafe {
+            std::slice::from_raw_parts(p_descriptor_copies, descriptor_copy_count as usize)
+        };
+        CompatibilityLayer::update_descriptor_sets(device, descriptor_writes, descriptor_copies);
+    }
+
     fn create_graphics_pipelines(
         device: ash::vk::Device,
         pipeline_cache: ash::vk::PipelineCache,
@@ -623,6 +737,33 @@ impl BindingLayer {
             unsafe { std::slice::from_raw_parts_mut(p_pipelines, create_info_count as usize) };
 
         CompatibilityLayer::create_graphics_pipelines(
+            device,
+            pipeline_cache,
+            infos,
+            to_opt(p_allocator),
+            pipelines,
+        )
+        .as_raw()
+    }
+
+    fn create_compute_pipelines(
+        device: ash::vk::Device,
+        pipeline_cache: ash::vk::PipelineCache,
+        create_info_count: u32,
+        p_create_infos: *const ash::vk::ComputePipelineCreateInfo<'_>,
+        p_allocator: *const ash::vk::AllocationCallbacks<'_>,
+        p_pipelines: *mut ash::vk::Pipeline,
+    ) -> i32 {
+        if p_pipelines == std::ptr::null_mut() {
+            return ash::vk::Result::ERROR_UNKNOWN.as_raw();
+        }
+
+        let infos =
+            unsafe { std::slice::from_raw_parts(p_create_infos, create_info_count as usize) };
+        let pipelines =
+            unsafe { std::slice::from_raw_parts_mut(p_pipelines, create_info_count as usize) };
+
+        CompatibilityLayer::create_compute_pipelines(
             device,
             pipeline_cache,
             infos,
@@ -770,6 +911,30 @@ impl BindingLayer {
         CompatibilityLayer::cmd_bind_pipeline(command_buffer, pipeline_bind_point, pipeline);
     }
 
+    fn cmd_bind_descriptor_sets(
+        command_buffer: ash::vk::CommandBuffer,
+        pipeline_bind_point: ash::vk::PipelineBindPoint,
+        layout: ash::vk::PipelineLayout,
+        first_set: u32,
+        descriptor_set_count: u32,
+        p_descriptor_sets: *const ash::vk::DescriptorSet,
+        dynamic_offset_count: u32,
+        p_dynamic_offsets: *const u32,
+    ) {
+        let descriptor_sets =
+            unsafe { std::slice::from_raw_parts(p_descriptor_sets, descriptor_set_count as usize) };
+        let dynamic_offsets =
+            unsafe { std::slice::from_raw_parts(p_dynamic_offsets, dynamic_offset_count as usize) };
+        CompatibilityLayer::cmd_bind_descriptor_sets(
+            command_buffer,
+            pipeline_bind_point,
+            layout,
+            first_set,
+            descriptor_sets,
+            dynamic_offsets,
+        );
+    }
+
     fn cmd_bind_vertex_buffers(
         command_buffer: ash::vk::CommandBuffer,
         first_binding: u32,
@@ -845,6 +1010,20 @@ impl BindingLayer {
             first_instance,
         )
         .as_raw()
+    }
+
+    fn cmd_dispatch(
+        command_buffer: ash::vk::CommandBuffer,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) {
+        CompatibilityLayer::cmd_dispatch(
+            command_buffer,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        );
     }
 
     fn queue_submit(
