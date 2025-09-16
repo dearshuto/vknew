@@ -222,9 +222,13 @@ impl CompatibilityLayer {
                     compute_pipeline_table: HashMap::default(),
                     shader_module_table: HashMap::default(),
                     semaphore_table: HashSet::default(),
+                    descriptor_pool_table: HashMap::default(),
+                    descriptor_set_table: HashMap::default(),
+                    descriptor_set_layout_table: HashMap::default(),
                     device_memory_working_memory_table: HashMap::default(),
+                    lazy_descriptor_sets: HashMap::default(),
                     pipeline_layout_table: Default::default(),
-                    render_pipeline_id_generator: IdGenerator::new(),
+                    pipeline_id_generator: IdGenerator::new(),
                     command_pool_id_generator: IdGenerator::new(),
                     command_table: HashMap::default(),
                     buffer_id_generator: IdGenerator::new(),
@@ -237,6 +241,9 @@ impl CompatibilityLayer {
                     pipeline_layout_id_generator: IdGenerator::new(),
                     swapchain_id_generator: IdGenerator::new(),
                     surface_texture: None,
+                    descriptor_pool_id_generator: IdGenerator::new(),
+                    descriptor_set_id_generator: IdGenerator::new(),
+                    descriptor_set_layout_id_generator: IdGenerator::new(),
                 };
                 instance_context.context = Some(context);
 
@@ -650,7 +657,7 @@ impl CompatibilityLayer {
 
     pub fn create_pipeline_layout(
         device: ash::vk::Device,
-        _create_info: &ash::vk::PipelineLayoutCreateInfo<'_>,
+        create_info: &ash::vk::PipelineLayoutCreateInfo<'_>,
         _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
         dst_pipeline_layout: &mut ash::vk::PipelineLayout,
     ) -> ash::vk::Result {
@@ -661,11 +668,31 @@ impl CompatibilityLayer {
                 return ash::vk::Result::ERROR_UNKNOWN;
             };
 
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[],
-                push_constant_ranges: &[],
-            });
+            let layout = if create_info.set_layout_count == 0 {
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[],
+                    push_constant_ranges: &[],
+                })
+            } else {
+                let set_layouts = unsafe {
+                    std::slice::from_raw_parts(
+                        create_info.p_set_layouts,
+                        create_info.set_layout_count as usize,
+                    )
+                };
+                // TODO: 複数レイアウト対応
+                let layout_id = Accessor::from(set_layouts[0]).peek();
+                let Some(bind_group) = context.descriptor_set_layout_table.get(&layout_id) else {
+                    return ash::vk::Result::ERROR_UNKNOWN;
+                };
+
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[bind_group],
+                    push_constant_ranges: &[],
+                })
+            };
 
             let id = context.pipeline_layout_id_generator.generate();
             context.pipeline_layout_table.insert(id, layout);
@@ -687,6 +714,188 @@ impl CompatibilityLayer {
 
             let id = Accessor::from(pipeline_layout).peek();
             context.pipeline_layout_table.remove(&id);
+        });
+    }
+
+    pub fn create_descriptor_pool(
+        device: ash::vk::Device,
+        _create_info: &ash::vk::DescriptorPoolCreateInfo<'_>,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+        dst_descriptor_pool: &mut ash::vk::DescriptorPool,
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let id = context.descriptor_pool_id_generator.generate();
+            context.descriptor_pool_table.insert(id, Vec::default());
+            AccessorMut::from(dst_descriptor_pool).with(id);
+            return ash::vk::Result::SUCCESS;
+        })
+    }
+
+    pub fn destroy_descriptor_pool(
+        device: ash::vk::Device,
+        descriptor_pool: ash::vk::DescriptorPool,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+    ) {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            let id = Accessor::from(descriptor_pool).peek();
+            context.descriptor_pool_table.remove(&id);
+        });
+    }
+
+    pub fn allocate_descriptor_sets(
+        device: ash::vk::Device,
+        allocate_info: &ash::vk::DescriptorSetAllocateInfo<'_>,
+        dst_descriptor_sets: &mut [ash::vk::DescriptorSet],
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let pool_id = Accessor::from(allocate_info.descriptor_pool).peek();
+            let set_layouts = unsafe {
+                std::slice::from_raw_parts(
+                    allocate_info.p_set_layouts,
+                    allocate_info.descriptor_set_count as usize,
+                )
+            };
+
+            for (index, set_layout) in set_layouts.iter().enumerate() {
+                let id = context.descriptor_set_id_generator.generate();
+                let set_layout_id = Accessor::from(*set_layout).peek();
+                context
+                    .lazy_descriptor_sets
+                    .insert(id, (pool_id, set_layout_id));
+
+                AccessorMut::from(&mut dst_descriptor_sets[index]).with(id);
+            }
+
+            ash::vk::Result::SUCCESS
+        })
+    }
+
+    pub fn create_descriptor_set_layout(
+        device: ash::vk::Device,
+        create_info: &ash::vk::DescriptorSetLayoutCreateInfo<'_>,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+        dst_set_layout: &mut ash::vk::DescriptorSetLayout,
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let device = &context.device;
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            let bindings = unsafe {
+                std::slice::from_raw_parts(
+                    create_info.p_bindings,
+                    create_info.binding_count as usize,
+                )
+            };
+            let entries: Vec<_> = bindings
+                .iter()
+                .map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding: binding.binding,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                })
+                .collect();
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &entries,
+                });
+            let id = context.descriptor_set_layout_id_generator.generate();
+            context
+                .descriptor_set_layout_table
+                .insert(id, bind_group_layout);
+            AccessorMut::from(dst_set_layout).with(id);
+
+            ash::vk::Result::SUCCESS
+        })
+    }
+
+    pub fn destroy_descriptor_set_layout(
+        device: ash::vk::Device,
+        descriptor_set_layout: ash::vk::DescriptorSetLayout,
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+    ) {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            let id = Accessor::from(descriptor_set_layout).peek();
+            context.descriptor_set_layout_table.remove(&id);
+        });
+    }
+
+    pub fn update_descriptor_sets(
+        device: ash::vk::Device,
+        descriptor_writes: &[ash::vk::WriteDescriptorSet<'_>],
+        _descriptor_copies: &[ash::vk::CopyDescriptorSet<'_>],
+    ) {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let device = &context.device;
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            for descriptor_write in descriptor_writes {
+                let set_id = Accessor::from(descriptor_write.dst_set).peek();
+                // TODO: pool_id は Validation に使う
+                if let Some((_pool_id, layout_id)) = context.lazy_descriptor_sets.remove(&set_id) {
+                    let Some(bind_layout) = context.descriptor_set_layout_table.get(&layout_id)
+                    else {
+                        continue;
+                    };
+                    let buffer_infos = unsafe {
+                        std::slice::from_raw_parts(
+                            descriptor_write.p_buffer_info,
+                            descriptor_write.descriptor_count as usize,
+                        )
+                    };
+                    let entries: Vec<_> = buffer_infos
+                        .iter()
+                        .filter_map(|info| {
+                            let buffer_id = Accessor::from(info.buffer).peek();
+                            let buffer = context.buffer_table.get(&buffer_id)?;
+                            Some(wgpu::BindGroupEntry {
+                                binding: descriptor_write.dst_binding,
+                                resource: buffer.as_entire_binding(),
+                            })
+                        })
+                        .collect();
+                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: bind_layout,
+                        entries: &entries,
+                    });
+                    context.descriptor_set_table.insert(set_id, bind_group);
+                    continue;
+                }
+
+                // TODO: すでに存在する BindGroup を更新する処理を記述する
+            }
         });
     }
 
@@ -771,8 +980,59 @@ impl CompatibilityLayer {
                         multiview: None,
                         cache: None,
                     });
-                let id = context.render_pipeline_id_generator.generate();
+                let id = context.pipeline_id_generator.generate();
                 context.render_pipeline_table.insert(id, render_pipeline);
+                AccessorMut::from(&mut dst_pipelines[index]).with(id);
+            }
+
+            ash::vk::Result::SUCCESS
+        })
+    }
+
+    pub fn create_compute_pipelines(
+        device: ash::vk::Device,
+        _pipeline_cache: ash::vk::PipelineCache,
+        infos: &[ash::vk::ComputePipelineCreateInfo<'_>],
+        _allocator: Option<&ash::vk::AllocationCallbacks<'_>>,
+        dst_pipelines: &mut [ash::vk::Pipeline],
+    ) -> ash::vk::Result {
+        let mut instance_handle = Accessor::from(device).peek().0;
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let device = &context.device;
+            let Some(context) = &mut context.context else {
+                return ash::vk::Result::ERROR_UNKNOWN;
+            };
+
+            for (index, info) in infos.iter().enumerate() {
+                let shader_module_id = Accessor::from(info.stage.module).peek();
+                let Some(compute_module) = context.shader_module_table.get(&shader_module_id)
+                else {
+                    return ash::vk::Result::ERROR_UNKNOWN;
+                };
+
+                let layout = if info.layout == ash::vk::PipelineLayout::null() {
+                    None
+                } else {
+                    let layout_id = Accessor::from(info.layout).peek();
+                    match context.pipeline_layout_table.get(&layout_id) {
+                        Some(layout) => Some(layout),
+                        None => None,
+                    }
+                };
+                let compute_pipeline =
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: None,
+                        layout,
+                        module: compute_module,
+                        entry_point: Some(unsafe {
+                            CStr::from_ptr(info.stage.p_name).to_str().unwrap()
+                        }),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        cache: None,
+                    });
+
+                let id = context.pipeline_id_generator.generate();
+                context.compute_pipeline_table.insert(id, compute_pipeline);
                 AccessorMut::from(&mut dst_pipelines[index]).with(id);
             }
 
@@ -1031,9 +1291,7 @@ impl CompatibilityLayer {
 
         let pipeline_id = match pipeline_bind_point {
             ash::vk::PipelineBindPoint::GRAPHICS => Accessor::from(pipeline).peek(),
-            ash::vk::PipelineBindPoint::COMPUTE => {
-                todo!()
-            }
+            ash::vk::PipelineBindPoint::COMPUTE => Accessor::from(pipeline).peek(),
             _ => {
                 panic!()
             }
@@ -1048,9 +1306,46 @@ impl CompatibilityLayer {
                 return;
             };
 
-            let command = Command::BindRenderPipeline(pipeline_id);
-            command_list.push(command);
+            match pipeline_bind_point {
+                ash::vk::PipelineBindPoint::GRAPHICS => {
+                    let command = Command::BindRenderPipeline(pipeline_id);
+                    command_list.push(command);
+                }
+                ash::vk::PipelineBindPoint::COMPUTE => {
+                    let command = Command::BindComputePipeline(pipeline_id);
+                    command_list.push(command);
+                }
+                _ => todo!(),
+            }
         })
+    }
+
+    pub fn cmd_bind_descriptor_sets(
+        command_buffer: ash::vk::CommandBuffer,
+        pipeline_bind_point: ash::vk::PipelineBindPoint,
+        _layout: ash::vk::PipelineLayout,
+        first_set: u32,
+        descriptor_sets: &[ash::vk::DescriptorSet],
+        _dynamic_offsets: &[u32],
+    ) {
+        let (id, mut instance_handle) = Accessor::from(command_buffer)
+            .peek_return(|context: &_| (context.id, context.instance_handle));
+
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            let Some(command_list) = context.command_table.get_mut(&id) else {
+                return;
+            };
+
+            for descriptor_set in &descriptor_sets[(first_set as usize)..] {
+                let id = Accessor::from(*descriptor_set).peek();
+                let command = Command::BindDescriptorSets((pipeline_bind_point, id));
+                command_list.push(command);
+            }
+        });
     }
 
     pub fn cmd_bind_vertex_buffers(
@@ -1098,6 +1393,29 @@ impl CompatibilityLayer {
         _buffer_memory_barriers: &[ash::vk::BufferMemoryBarrier<'_>],
         _image_memory_barriers: &[ash::vk::ImageMemoryBarrier<'_>],
     ) {
+    }
+
+    pub fn cmd_dispatch(
+        command_buffer: ash::vk::CommandBuffer,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) {
+        let (id, mut instance_handle) = Accessor::from(command_buffer)
+            .peek_return(|context: &_| (context.id, context.instance_handle));
+
+        AccessorMut::from(&mut instance_handle).update(|context: &mut _| {
+            let Some(context) = &mut context.context else {
+                return;
+            };
+
+            let Some(command_list) = context.command_table.get_mut(&id) else {
+                return;
+            };
+
+            let command = Command::Dispatch((group_count_x, group_count_y, group_count_z));
+            command_list.push(command);
+        })
     }
 
     pub fn cmd_draw(
@@ -1234,23 +1552,30 @@ struct Context {
 
     image_view_table: HashMap<ImageViewId, ImageId>,
     pipeline_layout_table: HashMap<PipelineLayoutId, wgpu::PipelineLayout>,
-    render_pipeline_table: HashMap<RenderPipelineId, wgpu::RenderPipeline>,
+    descriptor_pool_table: HashMap<DescriptorPoolId, Vec<DescriptorSetId>>,
+    descriptor_set_table: HashMap<DescriptorSetId, wgpu::BindGroup>,
+    descriptor_set_layout_table: HashMap<DescriptorSetLayoutId, wgpu::BindGroupLayout>,
+    render_pipeline_table: HashMap<PipelineId, wgpu::RenderPipeline>,
     buffer_table: HashMap<BufferId, wgpu::Buffer>,
-    #[allow(unused)]
-    compute_pipeline_table: HashMap<ComputePipelineId, wgpu::ComputePipeline>,
+    compute_pipeline_table: HashMap<PipelineId, wgpu::ComputePipeline>,
     shader_module_table: HashMap<ShaderModuleId, wgpu::ShaderModule>,
     semaphore_table: HashSet<SemaphoreId>,
 
     device_memory_working_memory_table: HashMap<DeviceMemoryId, Vec<u8>>,
+
+    lazy_descriptor_sets: HashMap<DescriptorSetId, (DescriptorPoolId, DescriptorSetLayoutId)>,
 
     image_id_generator: IdGenerator<ImageId>,
     image_view_id_generator: IdGenerator<ImageViewId>,
     buffer_id_generator: IdGenerator<BufferId>,
     command_pool_id_generator: IdGenerator<CommandPoolId>,
     command_buffer_id_generator: IdGenerator<CommandBufferId>,
+    descriptor_pool_id_generator: IdGenerator<DescriptorPoolId>,
+    descriptor_set_id_generator: IdGenerator<DescriptorSetId>,
+    descriptor_set_layout_id_generator: IdGenerator<DescriptorSetLayoutId>,
     device_memory_id_generator: IdGenerator<DeviceMemoryId>,
     pipeline_layout_id_generator: IdGenerator<PipelineLayoutId>,
-    render_pipeline_id_generator: IdGenerator<RenderPipelineId>,
+    pipeline_id_generator: IdGenerator<PipelineId>,
     shader_module_id_generator: IdGenerator<ShaderModuleId>,
     semaphore_id_generator: IdGenerator<SemaphoreId>,
     swapchain_id_generator: IdGenerator<SwapchainId>,
@@ -1266,13 +1591,15 @@ struct CommandBufferContext {
 vknew_macro::define_id!(BufferId);
 vknew_macro::define_id!(CommandBufferId);
 vknew_macro::define_id!(CommandPoolId);
-vknew_macro::define_id!(ComputePipelineId);
+vknew_macro::define_id!(DescriptorPoolId);
+vknew_macro::define_id!(DescriptorSetId);
+vknew_macro::define_id!(DescriptorSetLayoutId);
 vknew_macro::define_id!(DeviceId);
 vknew_macro::define_id!(DeviceMemoryId);
 vknew_macro::define_id!(ImageId);
 vknew_macro::define_id!(ImageViewId);
 vknew_macro::define_id!(PipelineLayoutId);
-vknew_macro::define_id!(RenderPipelineId);
+vknew_macro::define_id!(PipelineId);
 vknew_macro::define_id!(QueueId);
 vknew_macro::define_id!(SemaphoreId);
 vknew_macro::define_id!(SurfaceId);
@@ -1292,6 +1619,9 @@ struct Accessor;
     (ash::vk::Queue, InstanceHandleAdapter),
     (ash::vk::Buffer,BufferId),
     (ash::vk::CommandPool, CommandPoolId),
+    (ash::vk::DescriptorPool, DescriptorPoolId),
+    (ash::vk::DescriptorSet, DescriptorSetId),
+    (ash::vk::DescriptorSetLayout, DescriptorSetLayoutId),
     (ash::vk::Device, InstanceHandleAdapter),
     (ash::vk::DeviceMemory, DeviceMemoryId),
     (ash::vk::Image, ImageId),
@@ -1299,7 +1629,7 @@ struct Accessor;
     (ash::vk::Semaphore, SemaphoreId),
     (ash::vk::ShaderModule, ShaderModuleId),
     (ash::vk::SurfaceKHR, SurfaceId),
-    (ash::vk::Pipeline, RenderPipelineId),
+    (ash::vk::Pipeline, PipelineId),
     (ash::vk::PipelineLayout, PipelineLayoutId),
     (ash::vk::SwapchainKHR, SwapchainId)
 )]
